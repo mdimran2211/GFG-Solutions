@@ -33,7 +33,7 @@ function detectCategory(title, url) {
 }
 
 function detectLanguage(code) {
-  if (/\bpublic\s+class\s+\w+|System\.out\.println|import\s+java\./.test(code)) return "Java";
+  if (/\bclass\s+Solution\b|System\.out\.println|import\s+java\./.test(code)) return "Java";
   if (/\bdef\s+\w+\s*\(|print\s*\(|import\s+(numpy|pandas)/.test(code)) return "Python";
   if (/#include\s*<|std::cout|using\s+namespace\s+std/.test(code)) return "C++";
   if (/\bconsole\.log\s*\(|function\s+\w+\s*\(/.test(code)) return "JavaScript";
@@ -45,10 +45,21 @@ function getExtension(language) {
 }
 
 function makeReadme(title, url, language, category, code) {
-  const complexityHint = /for\s*\(|while\s*\(/.test(code)
+  const complexityHint = /\b(for|while)\s*\(/.test(code)
     ? "Analyze the loops in the solution to determine the exact complexity."
     : "Analyze the operations in the solution to determine the exact complexity.";
-  return `# ${title}\n\n- **Platform:** GeeksForGeeks\n- **Category:** ${category}\n- **Language:** ${language}\n- **Problem:** ${url}\n\n## Approach\n\nSolution submitted on GeeksForGeeks.\n\n## Complexity\n\n${complexityHint}\n\n## Notes\n\nThis solution was automatically synced from the GFG editor.\n`;
+
+  return `# ${title}\n\n` +
+    `- **Platform:** GeeksForGeeks\n` +
+    `- **Category:** ${category}\n` +
+    `- **Language:** ${language}\n` +
+    `- **Problem:** ${url}\n\n` +
+    `## Approach\n\n` +
+    `Solution submitted on GeeksForGeeks.\n\n` +
+    `## Complexity\n\n` +
+    `${complexityHint}\n\n` +
+    `## Notes\n\n` +
+    `This solution was automatically synced from the GFG editor.\n`;
 }
 
 async function putFile(repo, path, content, message, branch, token) {
@@ -62,16 +73,63 @@ async function putFile(repo, path, content, message, branch, token) {
     },
     body: JSON.stringify({ message, content: encoded, branch })
   });
+
   const data = await response.json();
   if (!response.ok) throw new Error(data.message || `GitHub HTTP ${response.status}`);
   return data;
 }
 
 async function readGfgPage(tabId) {
-  // Inject the extractor only when Save Solution is clicked.
-  // This removes the need to refresh the GFG page after every extension reload.
-  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
-  return await chrome.tabs.sendMessage(tabId, { type: "GET_GFG_SOLUTION" });
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      function visible(el) {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+      }
+
+      function cleanCode(lines) {
+        return lines
+          .map(line => (line.innerText || line.textContent || "").replace(/\u00a0/g, " "))
+          .join("\n")
+          .replace(/\r/g, "")
+          .trim();
+      }
+
+      // GFG currently renders its editor with Monaco. Read the rendered
+      // .view-line elements instead of the hidden Monaco textarea.
+      const editors = [...document.querySelectorAll(".monaco-editor")].filter(visible);
+      let code = "";
+
+      for (const editor of editors) {
+        const lines = [...editor.querySelectorAll(".view-lines .view-line")];
+        const candidate = cleanCode(lines);
+        if (candidate.length > code.length) code = candidate;
+      }
+
+      // Fallbacks for editor markup changes.
+      if (!code) {
+        const candidates = [
+          ...document.querySelectorAll(".view-lines .view-line"),
+          ...document.querySelectorAll("pre code"),
+          ...document.querySelectorAll("[contenteditable='true']")
+        ];
+        code = cleanCode(candidates);
+      }
+
+      const heading = document.querySelector("h1")?.innerText?.trim();
+      const title = heading || document.title.replace(/\s*[-|].*$/, "").trim() || "GFG Problem";
+
+      return {
+        title,
+        url: window.location.href.split("?")[0],
+        code
+      };
+    }
+  });
+
+  return results?.[0]?.result || null;
 }
 
 async function saveSolution() {
@@ -91,8 +149,8 @@ async function saveSolution() {
     }
 
     const page = await readGfgPage(tab.id);
-    if (!page?.title || !page?.code) {
-      setStatus("Could not detect the problem/code. Keep the GFG editor visible and try again.");
+    if (!page?.title || !page?.code || page.code.length < 10) {
+      setStatus("Could not read the GFG editor. Keep the code visible and click Save Solution again.");
       return;
     }
 
