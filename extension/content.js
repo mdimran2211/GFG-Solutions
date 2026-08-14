@@ -10,7 +10,8 @@ function getProblemTitle() {
     if (el?.innerText?.trim()) return el.innerText.trim();
   }
 
-  return document.title.replace(/\s*[-|].*$/, "").trim();
+  const title = document.title.replace(/\s*[-|].*$/, "").trim();
+  return title || "GFG Problem";
 }
 
 function getProblemUrl() {
@@ -18,6 +19,18 @@ function getProblemUrl() {
 }
 
 function getVisibleEditorCode() {
+  // GFG uses Monaco. The source is rendered in .view-lines while the textarea
+  // is mainly an input surface and often has no useful value.
+  const monacoLines = document.querySelector(".monaco-editor .view-lines");
+  if (monacoLines) {
+    const lines = [...monacoLines.querySelectorAll(".view-line")]
+      .map(line => line.innerText || line.textContent || "")
+      .join("\n")
+      .trim();
+
+    if (lines.length > 20) return lines;
+  }
+
   const selectors = [
     ".monaco-editor textarea",
     "textarea",
