@@ -10,7 +10,6 @@ async function getSettings() {
 
 function detectCategory(title, url) {
   const text = `${title} ${url}`.toLowerCase();
-
   const rules = [
     ["Arrays", ["array", "subarray", "subsequence", "two sum", "kadane"]],
     ["Strings", ["string", "palindrome", "anagram", "substring"]],
@@ -27,11 +26,9 @@ function detectCategory(title, url) {
     ["Greedy", ["greedy"]],
     ["Heap", ["heap", "priority queue", "kth largest", "kth smallest"]]
   ];
-
   for (const [category, keywords] of rules) {
     if (keywords.some(keyword => text.includes(keyword))) return category;
   }
-
   return "Miscellaneous";
 }
 
@@ -44,30 +41,14 @@ function detectLanguage(code) {
 }
 
 function getExtension(language) {
-  return {
-    Java: "java",
-    Python: "py",
-    "C++": "cpp",
-    JavaScript: "js"
-  }[language] || "txt";
+  return { Java: "java", Python: "py", "C++": "cpp", JavaScript: "js" }[language] || "txt";
 }
 
 function makeReadme(title, url, language, category, code) {
   const complexityHint = /for\s*\(|while\s*\(/.test(code)
     ? "Analyze the loops in the solution to determine the exact complexity."
     : "Analyze the operations in the solution to determine the exact complexity.";
-
-  return `# ${title}\n\n` +
-    `- **Platform:** GeeksForGeeks\n` +
-    `- **Category:** ${category}\n` +
-    `- **Language:** ${language}\n` +
-    `- **Problem:** ${url}\n\n` +
-    `## Approach\n\n` +
-    `Solution submitted on GeeksForGeeks.\n\n` +
-    `## Complexity\n\n` +
-    `${complexityHint}\n\n` +
-    `## Notes\n\n` +
-    `This solution was automatically synced from the GFG editor.\n`;
+  return `# ${title}\n\n- **Platform:** GeeksForGeeks\n- **Category:** ${category}\n- **Language:** ${language}\n- **Problem:** ${url}\n\n## Approach\n\nSolution submitted on GeeksForGeeks.\n\n## Complexity\n\n${complexityHint}\n\n## Notes\n\nThis solution was automatically synced from the GFG editor.\n`;
 }
 
 async function putFile(repo, path, content, message, branch, token) {
@@ -81,27 +62,37 @@ async function putFile(repo, path, content, message, branch, token) {
     },
     body: JSON.stringify({ message, content: encoded, branch })
   });
-
   const data = await response.json();
   if (!response.ok) throw new Error(data.message || `GitHub HTTP ${response.status}`);
   return data;
+}
+
+async function readGfgPage(tabId) {
+  // Inject the extractor only when Save Solution is clicked.
+  // This removes the need to refresh the GFG page after every extension reload.
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+  return await chrome.tabs.sendMessage(tabId, { type: "GET_GFG_SOLUTION" });
 }
 
 async function saveSolution() {
   try {
     setStatus("Reading GFG page...");
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const page = await chrome.tabs.sendMessage(tab.id, { type: "GET_GFG_SOLUTION" });
-
-    if (!page?.title || !page?.code) {
-      setStatus("Could not detect the problem/code. Refresh the GFG page and try again.");
+    const settings = await getSettings();
+    if (!settings.githubToken || !settings.repo) {
+      setStatus("GitHub settings are missing. Open Extension Options and save them once.");
       return;
     }
 
-    const settings = await getSettings();
-    if (!settings.githubToken || !settings.repo) {
-      setStatus("Open Extension Options and configure GitHub first.");
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.includes("geeksforgeeks.org")) {
+      setStatus("Open a GeeksForGeeks problem page first.");
+      return;
+    }
+
+    const page = await readGfgPage(tab.id);
+    if (!page?.title || !page?.code) {
+      setStatus("Could not detect the problem/code. Keep the GFG editor visible and try again.");
       return;
     }
 
@@ -114,23 +105,8 @@ async function saveSolution() {
 
     setStatus(`Detected: ${category}\nLanguage: ${language}\nUploading...`);
 
-    await putFile(
-      settings.repo,
-      `${folder}/Solution.${extension}`,
-      page.code + "\n",
-      `feat: add GFG solution - ${page.title}`,
-      branch,
-      settings.githubToken
-    );
-
-    await putFile(
-      settings.repo,
-      `${folder}/README.md`,
-      makeReadme(page.title, page.url, language, category, page.code),
-      `docs: add README for GFG - ${page.title}`,
-      branch,
-      settings.githubToken
-    );
+    await putFile(settings.repo, `${folder}/Solution.${extension}`, page.code + "\n", `feat: add GFG solution - ${page.title}`, branch, settings.githubToken);
+    await putFile(settings.repo, `${folder}/README.md`, makeReadme(page.title, page.url, language, category, page.code), `docs: add README for GFG - ${page.title}`, branch, settings.githubToken);
 
     setStatus(`Saved!\n${folder}/Solution.${extension}\n${folder}/README.md`);
   } catch (error) {
