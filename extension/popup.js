@@ -9,9 +9,11 @@ function setStatus(text) {
   status.textContent = text;
 }
 
-// --------------------------------
-// GitHub settings
-// --------------------------------
+
+// ========================================
+// GitHub Settings
+// ========================================
+
 async function getSettings() {
   return await chrome.storage.local.get([
     "githubToken",
@@ -20,9 +22,11 @@ async function getSettings() {
   ]);
 }
 
-// --------------------------------
-// Detect category
-// --------------------------------
+
+// ========================================
+// Detect Problem Category
+// ========================================
+
 function detectCategory(title, url) {
 
   const text = `${title} ${url}`.toLowerCase();
@@ -184,23 +188,32 @@ function detectCategory(title, url) {
   return "Miscellaneous";
 }
 
-// --------------------------------
-// Detect programming language
-// --------------------------------
+
+// ========================================
+// Detect Programming Language
+// ========================================
+
 function detectLanguage(code, detectedLanguage) {
 
-  if (detectedLanguage) {
+  // Use editor-detected language if available
+  if (
+    detectedLanguage &&
+    detectedLanguage !== "text"
+  ) {
     return detectedLanguage;
   }
 
+  // Java
   if (
     /\bclass\s+Solution\b/.test(code) ||
     /System\.out\.println/.test(code) ||
-    /import\s+java\./.test(code)
+    /import\s+java\./.test(code) ||
+    /\bpublic\s+static\s+/.test(code)
   ) {
     return "Java";
   }
 
+  // Python
   if (
     /\bdef\s+\w+\s*\(/.test(code) ||
     /import\s+(numpy|pandas)/.test(code) ||
@@ -209,6 +222,7 @@ function detectLanguage(code, detectedLanguage) {
     return "Python";
   }
 
+  // C++
   if (
     /#include\s*</.test(code) ||
     /std::cout/.test(code) ||
@@ -217,6 +231,7 @@ function detectLanguage(code, detectedLanguage) {
     return "C++";
   }
 
+  // JavaScript
   if (
     /console\.log\s*\(/.test(code) ||
     /function\s+\w+\s*\(/.test(code)
@@ -224,12 +239,15 @@ function detectLanguage(code, detectedLanguage) {
     return "JavaScript";
   }
 
+  // GFG default
   return "Java";
 }
 
-// --------------------------------
-// File extension
-// --------------------------------
+
+// ========================================
+// File Extension
+// ========================================
+
 function getExtension(language) {
 
   const extensions = {
@@ -242,9 +260,11 @@ function getExtension(language) {
   return extensions[language] || "txt";
 }
 
-// --------------------------------
-// README
-// --------------------------------
+
+// ========================================
+// Generate README
+// ========================================
+
 function makeReadme(
   title,
   url,
@@ -279,9 +299,71 @@ function makeReadme(
   );
 }
 
-// --------------------------------
-// Upload file to GitHub
-// --------------------------------
+
+// ========================================
+// Base64 Encode UTF-8
+// ========================================
+
+function encodeBase64(content) {
+
+  return btoa(
+    unescape(
+      encodeURIComponent(content)
+    )
+  );
+}
+
+
+// ========================================
+// Get Existing GitHub File SHA
+// ========================================
+
+async function getExistingFile(
+  repo,
+  path,
+  branch,
+  token
+) {
+
+  const url =
+    `https://api.github.com/repos/${repo}/contents/` +
+    path
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/") +
+    `?ref=${encodeURIComponent(branch)}`;
+
+  const response = await fetch(url, {
+
+    method: "GET",
+
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Accept": "application/vnd.github+json"
+    }
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data.message ||
+      `GitHub HTTP ${response.status}`
+    );
+  }
+
+  return data;
+}
+
+
+// ========================================
+// Upload / Update File on GitHub
+// ========================================
+
 async function putFile(
   repo,
   path,
@@ -291,11 +373,8 @@ async function putFile(
   token
 ) {
 
-  const encoded = btoa(
-    unescape(
-      encodeURIComponent(content)
-    )
-  );
+  const encoded =
+    encodeBase64(content);
 
   const url =
     `https://api.github.com/repos/${repo}/contents/` +
@@ -304,35 +383,56 @@ async function putFile(
       .map(encodeURIComponent)
       .join("/");
 
-  const response = await fetch(url, {
-    method: "PUT",
+  // Check whether file already exists
+  let existing = null;
 
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Accept": "application/vnd.github+json",
-      "Content-Type": "application/json"
-    },
+  try {
 
-    body: JSON.stringify({
-      message,
-      content: encoded,
-      branch
-    })
-  });
+    existing =
+      await getExistingFile(
+        repo,
+        path,
+        branch,
+        token
+      );
 
-  const data = await response.json();
+  } catch (error) {
+
+    console.log(
+      "Could not check existing file:",
+      error
+    );
+  }
+
+  const body = {
+    message,
+    content: encoded,
+    branch
+  };
+
+  // GitHub requires SHA when updating an existing file
+  if (existing?.sha) {
+    body.sha = existing.sha;
+  }
+
+  const response =
+    await fetch(url, {
+
+      method: "PUT",
+
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify(body)
+    });
+
+  const data =
+    await response.json();
 
   if (!response.ok) {
-
-    // If file already exists, GitHub requires SHA.
-    if (
-      response.status === 422 &&
-      data?.message?.includes("already exists")
-    ) {
-      throw new Error(
-        `File already exists: ${path}`
-      );
-    }
 
     throw new Error(
       data.message ||
@@ -343,18 +443,22 @@ async function putFile(
   return data;
 }
 
-// --------------------------------
-// Read GFG using content.js
-// --------------------------------
+
+// ========================================
+// Read GFG Page
+// ========================================
+
 async function readGfgPage(tabId) {
 
-  // --------------------------------
-  // Method 1: content.js
-  // --------------------------------
+  // ========================================
+  // METHOD 1
+  // Ask content.js
+  // ========================================
+
   try {
 
     console.log(
-      "Trying content script..."
+      "GFG Sync: asking content.js..."
     );
 
     const response =
@@ -365,15 +469,16 @@ async function readGfgPage(tabId) {
         }
       );
 
+    console.log(
+      "Content script response:",
+      response
+    );
+
     if (
       response?.success &&
       response?.code &&
       response.code.trim().length >= 10
     ) {
-
-      console.log(
-        "Content script succeeded"
-      );
 
       return response;
     }
@@ -386,13 +491,16 @@ async function readGfgPage(tabId) {
     );
   }
 
-  // --------------------------------
-  // Method 2: Direct page inspection
-  // --------------------------------
+
+  // ========================================
+  // METHOD 2
+  // Direct ACE Editor extraction
+  // ========================================
+
   try {
 
     console.log(
-      "Trying direct page inspection..."
+      "GFG Sync: trying ACE editor directly..."
     );
 
     const results =
@@ -404,22 +512,6 @@ async function readGfgPage(tabId) {
 
         func: () => {
 
-          function visible(el) {
-
-            const rect =
-              el.getBoundingClientRect();
-
-            const style =
-              getComputedStyle(el);
-
-            return (
-              rect.width > 0 &&
-              rect.height > 0 &&
-              style.display !== "none" &&
-              style.visibility !== "hidden"
-            );
-          }
-
           function clean(value) {
 
             return (value || "")
@@ -428,99 +520,262 @@ async function readGfgPage(tabId) {
               .trim();
           }
 
-          // ----------------------------
-          // Monaco
-          // ----------------------------
+
+          // ==================================
+          // Find ACE Editors
+          // ==================================
+
           const editors = [
             ...document.querySelectorAll(
-              ".monaco-editor"
+              ".ace_editor"
             )
-          ].filter(visible);
+          ];
+
 
           let bestCode = "";
+
+
+          // ==================================
+          // Read ACE rendered lines
+          // ==================================
 
           for (const editor of editors) {
 
             const lines = [
               ...editor.querySelectorAll(
-                ".view-lines .view-line"
+                ".ace_text-layer .ace_line"
               )
             ];
 
             const code = lines
-              .map(line =>
-                clean(
+              .map(line => {
+
+                return (
                   line.innerText ||
                   line.textContent ||
                   ""
-                )
-              )
+                );
+
+              })
               .join("\n")
               .trim();
+
 
             if (
               code.length >
               bestCode.length
             ) {
+
               bestCode = code;
             }
           }
 
-          // ----------------------------
-          // Fallback editors
-          // ----------------------------
-          if (bestCode.length < 10) {
 
-            const candidates = [
-              ...document.querySelectorAll(
-                "textarea"
-              ),
+          // ==================================
+          // ACE textarea fallback
+          // ==================================
 
-              ...document.querySelectorAll(
-                "pre code"
-              ),
+          if (
+            bestCode.length < 10
+          ) {
 
+            const aceTextareas = [
               ...document.querySelectorAll(
-                "[contenteditable='true']"
+                ".ace_editor textarea"
               )
             ];
 
-            for (const el of candidates) {
 
-              if (!visible(el)) {
-                continue;
-              }
+            for (
+              const textarea
+              of aceTextareas
+            ) {
 
-              const value = clean(
-                el.value ||
-                el.innerText ||
-                el.textContent ||
-                ""
-              );
+              const value =
+                clean(
+                  textarea.value ||
+                  textarea.textContent ||
+                  ""
+                );
+
 
               if (
                 value.length >
                 bestCode.length
               ) {
+
                 bestCode = value;
               }
             }
           }
 
-          // ----------------------------
-          // Title
-          // ----------------------------
+
+          // ==================================
+          // Generic textarea fallback
+          // ==================================
+
+          if (
+            bestCode.length < 10
+          ) {
+
+            const textareas = [
+              ...document.querySelectorAll(
+                "textarea"
+              )
+            ];
+
+
+            for (
+              const textarea
+              of textareas
+            ) {
+
+              const value =
+                clean(
+                  textarea.value ||
+                  textarea.textContent ||
+                  ""
+                );
+
+
+              if (
+                value.length >
+                bestCode.length
+              ) {
+
+                bestCode = value;
+              }
+            }
+          }
+
+
+          // ==================================
+          // Contenteditable fallback
+          // ==================================
+
+          if (
+            bestCode.length < 10
+          ) {
+
+            const editable = [
+              ...document.querySelectorAll(
+                "[contenteditable='true']"
+              )
+            ];
+
+
+            for (
+              const element
+              of editable
+            ) {
+
+              const value =
+                clean(
+                  element.innerText ||
+                  element.textContent ||
+                  ""
+                );
+
+
+              if (
+                value.length >
+                bestCode.length
+              ) {
+
+                bestCode = value;
+              }
+            }
+          }
+
+
+          // ==================================
+          // Find title
+          // ==================================
+
           const heading =
             document.querySelector("h1");
 
+
           const title =
             heading?.innerText?.trim() ||
+
             document.title
               .replace(/\s*[-|].*$/, "")
               .trim() ||
+
             "GFG Problem";
 
+
+          // ==================================
+          // Detect language
+          // ==================================
+
+          let language = "Java";
+
+          const languageElements = [
+            ...document.querySelectorAll(
+              ".ace_editor"
+            )
+          ];
+
+
+          for (
+            const editor
+            of languageElements
+          ) {
+
+            const className =
+              typeof editor.className === "string"
+                ? editor.className.toLowerCase()
+                : "";
+
+
+            if (
+              className.includes("python")
+            ) {
+
+              language = "Python";
+              break;
+
+            }
+
+
+            if (
+              className.includes("java")
+            ) {
+
+              language = "Java";
+              break;
+
+            }
+
+
+            if (
+              className.includes("c_cpp") ||
+              className.includes("cpp")
+            ) {
+
+              language = "C++";
+              break;
+
+            }
+
+
+            if (
+              className.includes(
+                "javascript"
+              )
+            ) {
+
+              language = "JavaScript";
+              break;
+
+            }
+          }
+
+
           return {
+
             success:
               bestCode.length >= 10,
 
@@ -533,21 +788,28 @@ async function readGfgPage(tabId) {
             code:
               bestCode,
 
-            language:
-              "Java"
+            language
           };
         }
       });
 
-    return (
-      results?.[0]?.result ||
-      null
+
+    const result =
+      results?.[0]?.result;
+
+
+    console.log(
+      "Direct ACE result:",
+      result
     );
+
+
+    return result || null;
 
   } catch (error) {
 
     console.error(
-      "Direct page inspection failed:",
+      "Direct ACE extraction failed:",
       error
     );
 
@@ -555,22 +817,32 @@ async function readGfgPage(tabId) {
   }
 }
 
-// --------------------------------
-// Save solution
-// --------------------------------
+
+// ========================================
+// Main Save Function
+// ========================================
+
 async function saveSolution() {
 
   try {
+
+    // --------------------------------
+    // Step 1
+    // --------------------------------
 
     setStatus(
       "Reading GFG page..."
     );
 
-    // ----------------------------
-    // Settings
-    // ----------------------------
+
+    // --------------------------------
+    // Step 2
+    // GitHub settings
+    // --------------------------------
+
     const settings =
       await getSettings();
+
 
     if (
       !settings.githubToken ||
@@ -578,27 +850,46 @@ async function saveSolution() {
     ) {
 
       setStatus(
-        "GitHub settings are missing. " +
+        "GitHub settings are missing.\n\n" +
         "Open Extension Options and save them once."
       );
 
       return;
     }
 
-    // ----------------------------
+
+    // --------------------------------
+    // Step 3
     // Current tab
-    // ----------------------------
+    // --------------------------------
+
     const [tab] =
       await chrome.tabs.query({
+
         active: true,
+
         currentWindow: true
       });
 
+
     if (
-      !tab?.id ||
+      !tab?.id
+    ) {
+
+      setStatus(
+        "Could not find the current browser tab."
+      );
+
+      return;
+    }
+
+
+    if (
       !tab.url ||
-      !tab.url.includes(
-        "geeksforgeeks.org"
+      !(
+        tab.url.includes(
+          "geeksforgeeks.org"
+        )
       )
     ) {
 
@@ -609,136 +900,227 @@ async function saveSolution() {
       return;
     }
 
-    // ----------------------------
+
+    // --------------------------------
+    // Step 4
     // Read GFG
-    // ----------------------------
+    // --------------------------------
+
     const page =
       await readGfgPage(tab.id);
 
+
     if (
-      !page ||
+      !page
+    ) {
+
+      setStatus(
+        "Could not communicate with the GFG page.\n\n" +
+        "Reload the extension and GFG page once."
+      );
+
+      return;
+    }
+
+
+    if (
       !page.code ||
       page.code.trim().length < 10
     ) {
 
       setStatus(
         "Could not read the GFG editor.\n\n" +
-        "Make sure the code editor is open and your solution is visible."
+        "The ACE editor was found, but no code could be extracted."
+      );
+
+      console.log(
+        "Full GFG page result:",
+        page
       );
 
       return;
     }
 
-    // ----------------------------
+
+    // --------------------------------
+    // Step 5
     // Detect details
-    // ----------------------------
+    // --------------------------------
+
+    const title =
+      page.title ||
+      "GFG Problem";
+
+
+    const url =
+      page.url ||
+      tab.url;
+
+
+    const code =
+      page.code.trim();
+
+
     const branch =
-      settings.branch || "main";
+      settings.branch ||
+      "main";
+
 
     const category =
       detectCategory(
-        page.title,
-        page.url
+        title,
+        url
       );
+
 
     const language =
       detectLanguage(
-        page.code,
+        code,
         page.language
       );
 
+
     const extension =
-      getExtension(language);
+      getExtension(
+        language
+      );
+
+
+    // --------------------------------
+    // Step 6
+    // Safe filename
+    // --------------------------------
 
     const safeTitle =
-      page.title
+      title
         .replace(
           /[^a-zA-Z0-9 _-]/g,
           ""
         )
-        .trim() ||
+        .trim()
+        .replace(
+          /\s+/g,
+          " "
+        ) ||
       "solution";
+
 
     const folder =
       `${category}/${safeTitle}`;
 
-    // ----------------------------
-    // Upload status
-    // ----------------------------
+
+    // --------------------------------
+    // Step 7
+    // Show detection
+    // --------------------------------
+
     setStatus(
-      `Detected: ${category}\n` +
+
+      `Detected successfully!\n\n` +
+
+      `Problem: ${title}\n` +
+
+      `Category: ${category}\n` +
+
       `Language: ${language}\n` +
-      `Code: ${page.code.length} characters\n\n` +
-      `Uploading...`
+
+      `Code: ${code.length} characters\n\n` +
+
+      `Uploading to GitHub...`
+
     );
 
-    // ----------------------------
-    // Solution
-    // ----------------------------
+
+    // --------------------------------
+    // Step 8
+    // Upload Solution
+    // --------------------------------
+
     await putFile(
+
       settings.repo,
 
       `${folder}/Solution.${extension}`,
 
-      page.code + "\n",
+      code + "\n",
 
-      `feat: add GFG solution - ${page.title}`,
+      `feat: add GFG solution - ${title}`,
 
       branch,
 
       settings.githubToken
+
     );
 
-    // ----------------------------
-    // README
-    // ----------------------------
+
+    // --------------------------------
+    // Step 9
+    // Upload README
+    // --------------------------------
+
     await putFile(
+
       settings.repo,
 
       `${folder}/README.md`,
 
       makeReadme(
-        page.title,
-        page.url,
+        title,
+        url,
         language,
         category,
-        page.code
+        code
       ),
 
-      `docs: add README for GFG - ${page.title}`,
+      `docs: add README for GFG - ${title}`,
 
       branch,
 
       settings.githubToken
+
     );
 
-    // ----------------------------
+
+    // --------------------------------
+    // Step 10
     // Success
-    // ----------------------------
+    // --------------------------------
+
     setStatus(
-      `Saved successfully!\n\n` +
+
+      `✅ Saved successfully!\n\n` +
+
       `${folder}/Solution.${extension}\n` +
+
       `${folder}/README.md`
+
     );
+
 
   } catch (error) {
 
     console.error(
-      "Save Solution Error:",
+      "GFG → GitHub Error:",
       error
     );
 
+
     setStatus(
-      `Error: ${error.message}`
+
+      `❌ Error:\n${error.message}`
+
     );
   }
 }
 
-// --------------------------------
-// Button
-// --------------------------------
+
+// ========================================
+// Save Button
+// ========================================
+
 const saveButton =
   document.getElementById("save");
+
 
 if (saveButton) {
 
@@ -746,4 +1128,5 @@ if (saveButton) {
     "click",
     saveSolution
   );
+
 }
