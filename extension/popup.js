@@ -27,14 +27,7 @@ function detectCategory(title, url) {
   return "Miscellaneous";
 }
 
-function detectLanguage(code, editorLanguage) {
-  if (editorLanguage && editorLanguage !== "text") {
-    const l = editorLanguage.toLowerCase();
-    if (l.includes("java")) return "Java";
-    if (l.includes("python")) return "Python";
-    if (l.includes("c++") || l.includes("cpp") || l.includes("c_cpp")) return "C++";
-    if (l.includes("javascript")) return "JavaScript";
-  }
+function detectLanguage(code) {
   if (/\bclass\s+Solution\b|System\.out\.println|import\s+java\.|\bpublic\s+static\s+/.test(code)) return "Java";
   if (/\bdef\s+\w+\s*\(|import\s+(numpy|pandas)|\bprint\s*\(/.test(code)) return "Python";
   if (/#include\s*</.test(code) || /std::cout|using\s+namespace\s+std/.test(code)) return "C++";
@@ -62,8 +55,10 @@ async function putFile(repo, path, content, message, branch, token) {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
   });
   if (existing.ok) sha = (await existing.json()).sha;
+
   const body = { message, content: b64(content), branch };
   if (sha) body.sha = sha;
+
   const response = await fetch(base, {
     method: "PUT",
     headers: {
@@ -82,54 +77,75 @@ async function readGfgPage(tabId) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
-      const clean = (v) => (v || "").replace(/\u00a0/g, " ").replace(/\r/g, "").trim();
+      const clean = (v) => (v || "").replace(/\u00a0/g, " ").replace(/\r/g, "");
+
+      // GFG's current editor is Ace. Reading each .ace_line separately
+      // preserves the original line breaks instead of flattening the code.
       const editors = [...document.querySelectorAll(".ace_editor")];
       let best = "";
 
       for (const editor of editors) {
-        // This is the exact GFG/Ace path that exposes the source in the editor DOM.
-        const textLayer = editor.querySelector(".ace_text-layer");
-        const layerText = clean(textLayer?.innerText || textLayer?.textContent);
-        if (layerText.length > best.length) best = layerText;
-
-        // Direct editor text fallback.
-        const editorText = clean(editor.innerText || editor.textContent);
-        if (editorText.length > best.length) best = editorText;
-      }
-
-      // Remove Ace line-number prefixes when .ace_editor.innerText is used.
-      if (best) {
-        const lines = best.split("\n");
-        if (lines.length > 2 && lines.slice(0, Math.min(8, lines.length)).every(x => /^\s*\d+\s*$/.test(x))) {
-          let i = 0;
-          while (i < lines.length && /^\s*\d+\s*$/.test(lines[i])) i++;
-          best = lines.slice(i).join("\n").trim();
+        const lines = [...editor.querySelectorAll(".ace_text-layer .ace_line")];
+        if (lines.length) {
+          const code = lines.map(line => clean(line.textContent)).join("\n").trim();
+          if (code.length > best.length) best = code;
         }
+
+        // Ace sometimes exposes the actual source through its internal API.
+        try {
+          if (window.ace) {
+            const aceEditor = window.ace.edit(editor);
+            const value = aceEditor?.getValue?.();
+            if (value && value.length > best.length) best = value;
+          }
+        } catch (_) {}
       }
 
-      // Other editor fallbacks.
+      // Fallbacks for editor markup changes.
       if (best.length < 10) {
         for (const el of document.querySelectorAll("textarea, [contenteditable='true'], pre code")) {
-          const value = clean(el.value || el.innerText || el.textContent);
+          const value = clean(el.value || el.innerText || el.textContent).trim();
           if (value.length > best.length) best = value;
         }
       }
 
-      const title = document.querySelector("h1")?.innerText?.trim() || document.title.replace(/\s*[-|].*$/, "").trim() || "GFG Problem";
+      // Do NOT use the first h1: on some GFG layouts the editor/template
+      // contributes its own heading. The document title is safer.
+      let title = document.title
+        .replace(/\s*\|.*$/, "")
+        .replace(/\s*-\s*GeeksforGeeks.*$/i, "")
+        .trim();
+
+      const titleCandidates = [
+        "h1[class*='problem']",
+        "h1[class*='Problem']",
+        "[class*='problem-title']",
+        "[class*='ProblemTitle']"
+      ];
+      for (const selector of titleCandidates) {
+        const el = document.querySelector(selector);
+        const candidate = el?.innerText?.trim();
+        if (candidate && candidate.length < 150 && !candidate.includes("class Solution")) {
+          title = candidate;
+          break;
+        }
+      }
+
       return {
-        title,
+        title: title || "GFG Problem",
         url: location.href.split("?")[0],
-        code: best,
-        editorLanguage: "Java"
+        code: best
       };
     }
   });
+
   return results?.[0]?.result || null;
 }
 
 async function saveSolution() {
   try {
     setStatus("Reading GFG page...");
+
     const settings = await getSettings();
     if (!settings.githubToken || !settings.repo) {
       setStatus("GitHub settings are missing. Open Extension Options and save them once.");
@@ -150,7 +166,7 @@ async function saveSolution() {
 
     const branch = settings.branch || "main";
     const category = detectCategory(page.title, page.url);
-    const language = detectLanguage(page.code, page.editorLanguage);
+    const language = detectLanguage(page.code);
     const ext = extensionFor(language);
     const safeTitle = page.title.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "solution";
     const folder = `${category}/${safeTitle}`;
