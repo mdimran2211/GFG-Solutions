@@ -23,11 +23,11 @@ function getProblemTitle() {
     }
   }
 
-  const title = document.title
-    .replace(/\s*[-|].*$/, "")
-    .trim();
-
-  return title || "GFG Problem";
+  return (
+    document.title
+      .replace(/\s*[-|].*$/, "")
+      .trim() || "GFG Problem"
+  );
 }
 
 function getProblemUrl() {
@@ -41,32 +41,39 @@ function cleanCode(code) {
     .trim();
 }
 
-// --------------------------------
-// Try Monaco rendered editor
-// --------------------------------
-function getMonacoRenderedCode() {
+
+// ========================================
+// ACE EDITOR
+// ========================================
+
+function getAceCode() {
   try {
     const editors = [
-      ...document.querySelectorAll(".monaco-editor")
+      ...document.querySelectorAll(".ace_editor")
     ];
 
     let bestCode = "";
 
     for (const editor of editors) {
+
       const lines = [
-        ...editor.querySelectorAll(".view-lines .view-line")
+        ...editor.querySelectorAll(
+          ".ace_text-layer .ace_line"
+        )
       ];
 
-      if (!lines.length) continue;
+      if (!lines.length) {
+        continue;
+      }
 
       const code = lines
-        .map(line =>
-          cleanCode(
+        .map(line => {
+          return (
             line.innerText ||
             line.textContent ||
             ""
-          )
-        )
+          );
+        })
         .join("\n")
         .trim();
 
@@ -75,157 +82,294 @@ function getMonacoRenderedCode() {
       }
     }
 
-    return bestCode;
+    return cleanCode(bestCode);
+
   } catch (error) {
-    console.log("Monaco rendered code error:", error);
+
+    console.error(
+      "ACE editor read error:",
+      error
+    );
+
     return "";
   }
 }
 
-// --------------------------------
-// Try textarea/editor fallback
-// --------------------------------
-function getTextareaCode() {
-  const selectors = [
-    "textarea",
-    "pre code",
-    "[contenteditable='true']"
-  ];
 
-  let bestCode = "";
+// ========================================
+// ACE textarea fallback
+// ========================================
 
-  for (const selector of selectors) {
-    const elements = [
-      ...document.querySelectorAll(selector)
+function getAceTextareaCode() {
+  try {
+
+    const textareas = [
+      ...document.querySelectorAll(
+        ".ace_editor textarea"
+      )
     ];
 
-    for (const el of elements) {
-      const code = cleanCode(
-        el.value ||
-        el.innerText ||
-        el.textContent ||
-        ""
-      );
+    let bestCode = "";
 
-      if (code.length > bestCode.length) {
-        bestCode = code;
+    for (const textarea of textareas) {
+
+      const value =
+        textarea.value ||
+        textarea.textContent ||
+        "";
+
+      if (value.trim().length > bestCode.length) {
+        bestCode = value.trim();
       }
     }
-  }
 
-  return bestCode;
+    return cleanCode(bestCode);
+
+  } catch (error) {
+
+    console.error(
+      "ACE textarea error:",
+      error
+    );
+
+    return "";
+  }
 }
 
-// --------------------------------
-// Get current editor code
-// --------------------------------
-function getVisibleEditorCode() {
 
-  // 1. Monaco rendered code
-  let code = getMonacoRenderedCode();
+// ========================================
+// Generic textarea fallback
+// ========================================
+
+function getGenericTextareaCode() {
+
+  try {
+
+    const textareas = [
+      ...document.querySelectorAll("textarea")
+    ];
+
+    let bestCode = "";
+
+    for (const textarea of textareas) {
+
+      const value =
+        textarea.value ||
+        textarea.textContent ||
+        "";
+
+      if (
+        value.trim().length >
+        bestCode.length
+      ) {
+        bestCode = value.trim();
+      }
+    }
+
+    return cleanCode(bestCode);
+
+  } catch (error) {
+
+    return "";
+  }
+}
+
+
+// ========================================
+// MAIN CODE DETECTION
+// ========================================
+
+function getEditorCode() {
+
+  // 1. ACE rendered lines
+  let code = getAceCode();
 
   if (code.length >= 10) {
+    console.log(
+      "GFG Sync: ACE code detected"
+    );
+
     return code;
   }
 
-  // 2. Textarea/contenteditable fallback
-  code = getTextareaCode();
+
+  // 2. ACE textarea
+  code = getAceTextareaCode();
 
   if (code.length >= 10) {
+    console.log(
+      "GFG Sync: ACE textarea detected"
+    );
+
     return code;
   }
+
+
+  // 3. Generic textarea
+  code = getGenericTextareaCode();
+
+  if (code.length >= 10) {
+    console.log(
+      "GFG Sync: textarea code detected"
+    );
+
+    return code;
+  }
+
 
   return "";
 }
 
-// --------------------------------
-// Detect language
-// --------------------------------
+
+// ========================================
+// LANGUAGE DETECTION
+// ========================================
+
 function detectLanguage() {
 
   try {
-    const editors = [
-      ...document.querySelectorAll(".monaco-editor")
-    ];
 
-    for (const editor of editors) {
+    const editor =
+      document.querySelector(".ace_editor");
 
-      const classes = editor.className || "";
+    if (editor) {
 
-      if (classes.includes("language-java")) {
+      const classes =
+        editor.className || "";
+
+      if (
+        classes.includes("java")
+      ) {
         return "Java";
       }
 
-      if (classes.includes("language-python")) {
+      if (
+        classes.includes("python")
+      ) {
         return "Python";
       }
 
       if (
-        classes.includes("language-cpp") ||
-        classes.includes("language-c++")
+        classes.includes("cpp") ||
+        classes.includes("c_cpp")
       ) {
         return "C++";
       }
 
       if (
-        classes.includes("language-javascript") ||
-        classes.includes("language-js")
+        classes.includes("javascript")
       ) {
         return "JavaScript";
       }
     }
 
   } catch (error) {
-    console.log("Language detection failed:", error);
+
+    console.log(
+      "Language detection error:",
+      error
+    );
   }
 
   return "Java";
 }
 
-// --------------------------------
-// Message listener
-// --------------------------------
+
+// ========================================
+// MESSAGE LISTENER
+// ========================================
+
 chrome.runtime.onMessage.addListener(
   (message, sender, sendResponse) => {
 
-    if (message?.type !== "GET_GFG_SOLUTION") {
+    if (
+      message?.type !==
+      "GET_GFG_SOLUTION"
+    ) {
       return;
     }
 
     try {
 
-      const title = getProblemTitle();
-      const url = getProblemUrl();
-      const code = getVisibleEditorCode();
-      const language = detectLanguage();
+      const title =
+        getProblemTitle();
 
-      console.log("GFG Sync:");
-      console.log("Title:", title);
-      console.log("Language:", language);
-      console.log("Code length:", code.length);
+      const url =
+        getProblemUrl();
+
+      const code =
+        getEditorCode();
+
+      const language =
+        detectLanguage();
+
+      console.log(
+        "========== GFG SYNC =========="
+      );
+
+      console.log(
+        "Title:",
+        title
+      );
+
+      console.log(
+        "Language:",
+        language
+      );
+
+      console.log(
+        "Code length:",
+        code.length
+      );
+
+      console.log(
+        "Code:",
+        code
+      );
+
+      console.log(
+        "=============================="
+      );
+
 
       sendResponse({
-        success: code.length >= 10,
+
+        success:
+          code.length >= 10,
+
         title,
+
         url,
+
         code,
+
         language
+
       });
 
     } catch (error) {
 
       console.error(
-        "GFG content script error:",
+        "GFG Sync error:",
         error
       );
 
       sendResponse({
+
         success: false,
+
         title: "",
-        url: window.location.href,
+
+        url:
+          window.location.href,
+
         code: "",
+
         language: "Java",
-        error: error.message
+
+        error:
+          error.message
+
       });
     }
 
