@@ -1,8 +1,3 @@
-// ================================
-// GFG → GitHub Sync
-// content.js
-// ================================
-
 function getProblemTitle() {
   const selectors = [
     "h1",
@@ -30,9 +25,11 @@ function getProblemTitle() {
   );
 }
 
+
 function getProblemUrl() {
   return window.location.href.split("?")[0];
 }
+
 
 function cleanCode(code) {
   return (code || "")
@@ -43,177 +40,149 @@ function cleanCode(code) {
 
 
 // ========================================
-// ACE EDITOR
+// READ GFG ACE EDITOR
 // ========================================
 
-function getAceCode() {
-  try {
-    const editors = [
-      ...document.querySelectorAll(".ace_editor")
-    ];
+function getAceEditorCode() {
 
-    let bestCode = "";
+  const editors = [
+    ...document.querySelectorAll(".ace_editor")
+  ];
 
-    for (const editor of editors) {
+  let bestCode = "";
 
-      const lines = [
-        ...editor.querySelectorAll(
-          ".ace_text-layer .ace_line"
-        )
-      ];
+  for (const editor of editors) {
 
-      if (!lines.length) {
-        continue;
-      }
-
-      const code = lines
-        .map(line => {
-          return (
-            line.innerText ||
-            line.textContent ||
-            ""
-          );
-        })
-        .join("\n")
-        .trim();
-
-      if (code.length > bestCode.length) {
-        bestCode = code;
-      }
-    }
-
-    return cleanCode(bestCode);
-
-  } catch (error) {
-
-    console.error(
-      "ACE editor read error:",
-      error
+    const code = cleanCode(
+      editor.innerText ||
+      editor.textContent ||
+      ""
     );
 
-    return "";
-  }
-}
-
-
-// ========================================
-// ACE textarea fallback
-// ========================================
-
-function getAceTextareaCode() {
-  try {
-
-    const textareas = [
-      ...document.querySelectorAll(
-        ".ace_editor textarea"
-      )
-    ];
-
-    let bestCode = "";
-
-    for (const textarea of textareas) {
-
-      const value =
-        textarea.value ||
-        textarea.textContent ||
-        "";
-
-      if (value.trim().length > bestCode.length) {
-        bestCode = value.trim();
-      }
+    if (code.length > bestCode.length) {
+      bestCode = code;
     }
-
-    return cleanCode(bestCode);
-
-  } catch (error) {
-
-    console.error(
-      "ACE textarea error:",
-      error
-    );
-
-    return "";
   }
+
+  return bestCode;
 }
 
 
 // ========================================
-// Generic textarea fallback
+// REMOVE ACE LINE NUMBERS
 // ========================================
 
-function getGenericTextareaCode() {
+function removeLineNumbers(code) {
 
-  try {
+  const lines = code.split("\n");
 
-    const textareas = [
-      ...document.querySelectorAll("textarea")
-    ];
+  // Your screenshot/console shows:
+  //
+  // 1
+  // 2
+  // 3
+  // ...
+  // 20
+  // class Solution {
+  //
+  // Remove those standalone numbers.
 
-    let bestCode = "";
+  let startIndex = 0;
 
-    for (const textarea of textareas) {
-
-      const value =
-        textarea.value ||
-        textarea.textContent ||
-        "";
-
-      if (
-        value.trim().length >
-        bestCode.length
-      ) {
-        bestCode = value.trim();
-      }
-    }
-
-    return cleanCode(bestCode);
-
-  } catch (error) {
-
-    return "";
+  while (
+    startIndex < lines.length &&
+    /^\s*\d+\s*$/.test(lines[startIndex])
+  ) {
+    startIndex++;
   }
+
+  return lines
+    .slice(startIndex)
+    .join("\n")
+    .trim();
 }
 
 
 // ========================================
-// MAIN CODE DETECTION
+// MAIN EDITOR CODE
 // ========================================
 
 function getEditorCode() {
 
-  // 1. ACE rendered lines
-  let code = getAceCode();
+  // 1. ACE editor
+  let code = getAceEditorCode();
 
   if (code.length >= 10) {
-    console.log(
-      "GFG Sync: ACE code detected"
-    );
 
-    return code;
+    code = removeLineNumbers(code);
+
+    if (code.length >= 10) {
+
+      console.log(
+        "GFG Sync: ACE editor detected"
+      );
+
+      console.log(
+        "Code length:",
+        code.length
+      );
+
+      console.log(
+        "Code:",
+        code
+      );
+
+      return code;
+    }
   }
 
 
-  // 2. ACE textarea
-  code = getAceTextareaCode();
-
-  if (code.length >= 10) {
-    console.log(
-      "GFG Sync: ACE textarea detected"
+  // 2. ACE textarea fallback
+  const aceTextarea =
+    document.querySelector(
+      ".ace_editor textarea"
     );
 
-    return code;
+  if (aceTextarea) {
+
+    code = cleanCode(
+      aceTextarea.value ||
+      aceTextarea.textContent ||
+      ""
+    );
+
+    if (code.length >= 10) {
+
+      console.log(
+        "GFG Sync: ACE textarea detected"
+      );
+
+      return code;
+    }
   }
 
 
-  // 3. Generic textarea
-  code = getGenericTextareaCode();
+  // 3. Generic textarea fallback
+  const textareas = [
+    ...document.querySelectorAll("textarea")
+  ];
 
-  if (code.length >= 10) {
-    console.log(
-      "GFG Sync: textarea code detected"
+  for (const textarea of textareas) {
+
+    code = cleanCode(
+      textarea.value ||
+      textarea.textContent ||
+      ""
     );
 
-    return code;
+    if (code.length >= 10) {
+
+      console.log(
+        "GFG Sync: generic textarea detected"
+      );
+
+      return code;
+    }
   }
 
 
@@ -222,54 +191,46 @@ function getEditorCode() {
 
 
 // ========================================
-// LANGUAGE DETECTION
+// LANGUAGE
 // ========================================
 
-function detectLanguage() {
+function detectLanguage(code) {
 
-  try {
-
-    const editor =
-      document.querySelector(".ace_editor");
-
-    if (editor) {
-
-      const classes =
-        editor.className || "";
-
-      if (
-        classes.includes("java")
-      ) {
-        return "Java";
-      }
-
-      if (
-        classes.includes("python")
-      ) {
-        return "Python";
-      }
-
-      if (
-        classes.includes("cpp") ||
-        classes.includes("c_cpp")
-      ) {
-        return "C++";
-      }
-
-      if (
-        classes.includes("javascript")
-      ) {
-        return "JavaScript";
-      }
-    }
-
-  } catch (error) {
-
-    console.log(
-      "Language detection error:",
-      error
-    );
+  if (
+    /\bclass\s+Solution\b/.test(code) ||
+    /System\.out\.println/.test(code) ||
+    /import\s+java\./.test(code) ||
+    /\bpublic\s+static\s+/.test(code)
+  ) {
+    return "Java";
   }
+
+
+  if (
+    /\bdef\s+\w+\s*\(/.test(code) ||
+    /\bprint\s*\(/.test(code) ||
+    /import\s+(numpy|pandas)/.test(code)
+  ) {
+    return "Python";
+  }
+
+
+  if (
+    /#include\s*</.test(code) ||
+    /std::cout/.test(code) ||
+    /using\s+namespace\s+std/.test(code)
+  ) {
+    return "C++";
+  }
+
+
+  if (
+    /console\.log\s*\(/.test(code) ||
+    /function\s+\w+\s*\(/.test(code)
+  ) {
+    return "JavaScript";
+  }
+
 
   return "Java";
 }
@@ -289,6 +250,7 @@ chrome.runtime.onMessage.addListener(
       return;
     }
 
+
     try {
 
       const title =
@@ -301,7 +263,8 @@ chrome.runtime.onMessage.addListener(
         getEditorCode();
 
       const language =
-        detectLanguage();
+        detectLanguage(code);
+
 
       console.log(
         "========== GFG SYNC =========="
@@ -320,11 +283,6 @@ chrome.runtime.onMessage.addListener(
       console.log(
         "Code length:",
         code.length
-      );
-
-      console.log(
-        "Code:",
-        code
       );
 
       console.log(
@@ -354,6 +312,7 @@ chrome.runtime.onMessage.addListener(
         error
       );
 
+
       sendResponse({
 
         success: false,
@@ -372,6 +331,7 @@ chrome.runtime.onMessage.addListener(
 
       });
     }
+
 
     return true;
   }
