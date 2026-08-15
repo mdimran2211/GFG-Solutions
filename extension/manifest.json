@@ -1,12 +1,32 @@
 {
   "manifest_version": 3,
   "name": "GFG → GitHub Sync",
-  "version": "0.2.0",
-  "description": "Save GeeksForGeeks solutions to GitHub with one click.",
-  "permissions": ["storage", "activeTab", "scripting"],
-  "host_permissions": ["https://www.geeksforgeeks.org/*", "https://api.github.com/*"],
+  "version": "1.0.0",
+  "description": "Automatically save GeeksForGeeks solutions to GitHub.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.geeksforgeeks.org/*",
+    "https://geeksforgeeks.org/*",
+    "https://api.github.com/*"
+  ],
   "action": {
     "default_popup": "popup.html"
   },
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.geeksforgeeks.org/*",
+        "https://geeksforgeeks.org/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }
