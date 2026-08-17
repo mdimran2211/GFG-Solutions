@@ -47,28 +47,43 @@ function b64(text) {
   return btoa(unescape(encodeURIComponent(text)));
 }
 
+async function fetchWithRetry(url, options, attempts = 4) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok || (response.status !== 429 && response.status < 500)) return response;
+      lastError = new Error(`GitHub temporary error (HTTP ${response.status})`);
+      if (attempt < attempts) await new Promise(r => setTimeout(r, Math.min(1000 * (2 ** (attempt - 1)), 5000)));
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await new Promise(r => setTimeout(r, Math.min(1000 * (2 ** (attempt - 1)), 5000)));
+    }
+  }
+  throw lastError || new Error("GitHub request failed");
+}
+
 async function putFile(repo, path, content, message, branch, token) {
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   const base = `https://api.github.com/repos/${repo}/contents/${encodedPath}`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "Content-Type": "application/json"
+  };
   let sha;
-  const existing = await fetch(`${base}?ref=${encodeURIComponent(branch)}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
-  });
-  if (existing.ok) sha = (await existing.json()).sha;
+  const existing = await fetchWithRetry(`${base}?ref=${encodeURIComponent(branch)}`, { method: "GET", headers });
+  if (existing.ok) {
+    sha = (await existing.json()).sha;
+  } else if (existing.status !== 404) {
+    const data = await existing.json().catch(() => ({}));
+    throw new Error(data.message || `GitHub HTTP ${existing.status}`);
+  }
 
   const body = { message, content: b64(content), branch };
   if (sha) body.sha = sha;
-
-  const response = await fetch(base, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-  const data = await response.json();
+  const response = await fetchWithRetry(base, { method: "PUT", headers, body: JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.message || `GitHub HTTP ${response.status}`);
   return data;
 }
@@ -78,20 +93,14 @@ async function readGfgPage(tabId) {
     target: { tabId },
     func: () => {
       const clean = (v) => (v || "").replace(/\u00a0/g, " ").replace(/\r/g, "");
-
-      // GFG's current editor is Ace. Reading each .ace_line separately
-      // preserves the original line breaks instead of flattening the code.
       const editors = [...document.querySelectorAll(".ace_editor")];
       let best = "";
-
       for (const editor of editors) {
         const lines = [...editor.querySelectorAll(".ace_text-layer .ace_line")];
         if (lines.length) {
           const code = lines.map(line => clean(line.textContent)).join("\n").trim();
           if (code.length > best.length) best = code;
         }
-
-        // Ace sometimes exposes the actual source through its internal API.
         try {
           if (window.ace) {
             const aceEditor = window.ace.edit(editor);
@@ -100,84 +109,59 @@ async function readGfgPage(tabId) {
           }
         } catch (_) {}
       }
-
-      // Fallbacks for editor markup changes.
       if (best.length < 10) {
         for (const el of document.querySelectorAll("textarea, [contenteditable='true'], pre code")) {
           const value = clean(el.value || el.innerText || el.textContent).trim();
           if (value.length > best.length) best = value;
         }
       }
-
-      // Do NOT use the first h1: on some GFG layouts the editor/template
-      // contributes its own heading. The document title is safer.
-      let title = document.title
-        .replace(/\s*\|.*$/, "")
-        .replace(/\s*-\s*GeeksforGeeks.*$/i, "")
-        .trim();
-
-      const titleCandidates = [
-        "h1[class*='problem']",
-        "h1[class*='Problem']",
-        "[class*='problem-title']",
-        "[class*='ProblemTitle']"
-      ];
-      for (const selector of titleCandidates) {
-        const el = document.querySelector(selector);
-        const candidate = el?.innerText?.trim();
-        if (candidate && candidate.length < 150 && !candidate.includes("class Solution")) {
-          title = candidate;
-          break;
-        }
+      let title = document.title.replace(/\s*\|.*$/, "").replace(/\s*-\s*GeeksforGeeks.*$/i, "").trim();
+      for (const selector of ["h1[class*='problem']", "h1[class*='Problem']", "[class*='problem-title']", "[class*='ProblemTitle']"]) {
+        const candidate = document.querySelector(selector)?.innerText?.trim();
+        if (candidate && candidate.length < 150 && !candidate.includes("class Solution")) { title = candidate; break; }
       }
-
-      return {
-        title: title || "GFG Problem",
-        url: location.href.split("?")[0],
-        code: best
-      };
+      return { title: title || "GFG Problem", url: location.href.split("?")[0], code: best };
     }
   });
-
   return results?.[0]?.result || null;
 }
 
 async function saveSolution() {
   try {
     setStatus("Reading GFG page...");
-
     const settings = await getSettings();
     if (!settings.githubToken || !settings.repo) {
       setStatus("GitHub settings are missing. Open Extension Options and save them once.");
       return;
     }
-
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !tab.url?.includes("geeksforgeeks.org")) {
       setStatus("Open a GeeksForGeeks problem page first.");
       return;
     }
-
     const page = await readGfgPage(tab.id);
     if (!page?.code || page.code.length < 10) {
       setStatus("Could not read the GFG editor. Keep the code visible and click Save Solution again.");
       return;
     }
-
     const branch = settings.branch || "main";
     const category = detectCategory(page.title, page.url);
     const language = detectLanguage(page.code);
     const ext = extensionFor(language);
     const safeTitle = page.title.replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "solution";
     const folder = `${category}/${safeTitle}`;
-
     setStatus(`Detected: ${category}\nLanguage: ${language}\nUploading...`);
     await putFile(settings.repo, `${folder}/Solution.${ext}`, page.code + "\n", `feat: add GFG solution - ${page.title}`, branch, settings.githubToken);
     await putFile(settings.repo, `${folder}/README.md`, readme(page.title, page.url, language, category), `docs: add README for GFG - ${page.title}`, branch, settings.githubToken);
     setStatus(`Saved!\n${folder}/Solution.${ext}\n${folder}/README.md`);
   } catch (error) {
     console.error("GFG Sync error:", error);
-    setStatus(`Error: ${error.message}`);
+    const message = String(error?.message || error);
+    if (message.includes("No server is currently available") || message.includes("503")) {
+      setStatus("GitHub is temporarily unavailable. Automatic retry failed; click Save Solution again after a few seconds.");
+    } else {
+      setStatus(`Error: ${message}`);
+    }
   }
 }
 
